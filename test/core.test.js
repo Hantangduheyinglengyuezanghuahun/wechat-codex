@@ -52,7 +52,9 @@ test('WeChat → native turn → WeChat preserves text, instructions and replies
   await drainInbox(c, {});
   assert.deepEqual(rpc.calls.find(x => x.method === 'thread/start').params, { cwd: c.cwd });
   const start = rpc.calls.find(x => x.method === 'turn/start');
-  assert.deepEqual(start.params, { threadId: ID, input: [{ type: 'text', text, text_elements: [] }], clientUserMessageId: 'owner:100' });
+  assert.deepEqual(start.params, { threadId: ID, input: [{ type: 'text', text, text_elements: [] }], clientUserMessageId: start.params.clientUserMessageId });
+  assert.match(start.params.clientUserMessageId, /^[0-9a-f-]{36}$/);
+  assert.ok(!start.params.clientUserMessageId.includes('owner'));
   c.notification({ method: 'item/completed', params: { threadId: ID, item: { type: 'agentMessage', id: 'reply-1', text: ' 原样 reply\n', phase: 'final_answer' } } });
   c.notification({ method: 'turn/completed', params: { threadId: ID, turn: { id: 'turn-1', status: 'completed', items: [{ type: 'agentMessage', id: 'reply-1', text: ' 原样 reply\n' }] } } });
   assert.equal(state.data.outbox.length, 1);
@@ -233,7 +235,8 @@ test('delivery clear leaves native history and never starts another turn', async
 
 test('explicit downloads snapshot bytes before later workspace changes', async t => {
   const { controller: c, state, dir } = setup(t);
-  const file = path.join(dir, 'report.txt'); fs.writeFileSync(file, 'first version');
+  fs.mkdirSync(path.join(dir, 'exports'));
+  const file = path.join(dir, 'exports', 'report.txt'); fs.writeFileSync(file, 'first version');
   await c.handle('owner', '/download report.txt');
   const delivery = state.data.outbox.find(m => m.file);
   fs.writeFileSync(file, 'changed later');
@@ -249,4 +252,60 @@ test('a replayed message may refresh reply context without creating another task
   state.ingest([{ ...incoming('1', 'hello'), context_token: 'fresh-context' }], 'c2', 'owner');
   assert.equal(state.data.inbox.length, 0);
   assert.equal(state.chat('owner').contextToken, 'fresh-context');
+});
+
+test('failed delivery does not block following replies and can be dropped individually', async t => {
+  const { controller: c, state } = setup(t); state.chat('owner').contextToken = 'ctx';
+  c.say('owner', 'bad'); c.say('owner', 'good'); const bad = state.data.outbox[0]; const sent = [];
+  const transport = { text: async (_u, _c, text) => { if (text === 'bad') throw Object.assign(new Error('gone'), { code: 'ENOENT' }); sent.push(text); } };
+  await deliverNext(state, transport, 100);
+  assert.equal(bad.failed, true);
+  await deliverNext(state, transport, 101);
+  assert.deepEqual(sent, ['good']);
+  await c.handle('owner', `/outbox drop ${bad.id}`);
+  assert.ok(!state.data.outbox.some(m => m.id === bad.id));
+});
+
+test('temporary failures back off without blocking later replies and pause after five attempts', async t => {
+  const { state } = setup(t); state.chat('owner').contextToken = 'ctx';
+  state.enqueue('owner', 'bad'); state.enqueue('owner', 'good'); const bad = state.data.outbox[0];
+  const sent = [];
+  const transport = { text: async (_u, _c, text) => { if (text === 'bad') throw new Error('offline'); sent.push(text); } };
+  await deliverNext(state, transport, 100);
+  await deliverNext(state, transport, 101);
+  assert.deepEqual(sent, ['good']);
+  for (let n = 0; n < 4; n++) await deliverNext(state, transport, 100000 * (n + 1));
+  assert.equal(bad.attempts, 5); assert.equal(bad.failed, true);
+});
+
+test('exports reject traversal, symlinks, hardlinks and credential names; delivered snapshots are removed', async t => {
+  const { controller: c, state, dir } = setup(t);
+  await c.handle('owner', '/exports'); const exports = path.join(dir, 'exports');
+  const outside = path.join(dir, 'private.txt'); fs.writeFileSync(outside, 'private');
+  fs.symlinkSync(outside, path.join(exports, 'link.txt')); fs.linkSync(outside, path.join(exports, 'hard.txt'));
+  fs.writeFileSync(path.join(exports, '.env'), 'secret');
+  for (const file of ['../private.txt', outside, 'link.txt', 'hard.txt', '.env']) await assert.rejects(c.handle('owner', `/download ${file}`));
+  fs.writeFileSync(path.join(exports, 'result.txt'), 'result');
+  state.data.outbox = []; await c.handle('owner', '/download result.txt');
+  const snapshot = state.data.outbox[0].file; state.chat('owner').contextToken = 'ctx';
+  await deliverNext(state, { upload: async () => ({}), sendItems: async () => {} });
+  assert.equal(fs.existsSync(snapshot), false); assert.equal(fs.readFileSync(path.join(exports, 'result.txt'), 'utf8'), 'result');
+});
+
+test('legacy exports remain quarantined and cannot be retried', async t => {
+  const { state, controller: c } = setup(t);
+  state.data.outbox.push({ id: 'legacy', user: 'owner', file: '/tmp/old-export', attempts: 0 }); state.save();
+  c.state = new State(state.dir);
+  assert.equal(c.state.data.outbox[0].failed, true);
+  await assert.rejects(c.handle('owner', '/outbox retry legacy'), /Legacy exports/);
+});
+
+test('dropping a delivery during upload prevents its subsequent send', async t => {
+  const { controller: c, state, dir } = setup(t);
+  fs.mkdirSync(path.join(dir, 'exports')); fs.writeFileSync(path.join(dir, 'exports', 'result.txt'), 'result');
+  await c.handle('owner', '/download result.txt'); state.chat('owner').contextToken = 'ctx';
+  const item = state.data.outbox[0]; let completeUpload; let sent = false;
+  const pending = deliverNext(state, { upload: () => new Promise(resolve => { completeUpload = resolve; }), sendItems: async () => { sent = true; } });
+  await c.handle('owner', `/outbox drop ${item.id}`);
+  completeUpload({}); await pending; assert.equal(sent, false);
 });

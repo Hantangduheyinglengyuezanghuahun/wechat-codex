@@ -85,3 +85,11 @@ test('outbound file encryption and media envelope follow the Tencent protocol', 
   assert.equal(item.type, 4); assert.equal(item.file_item.file_name, 'example.txt');
   assert.equal(item.file_item.media.encrypt_query_param, 'download-reference');
 });
+
+test('download rechecks storage budget immediately before writing', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wechat-media-quota-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const client = new WeChat({}, async () => new Response('content'));
+  await assert.rejects(client.download({ type: 4, file_item: { file_name: 'a.txt', media: { full_url: 'https://cdn.weixin.qq.com/file' } } }, dir, () => { throw new Error('quota exhausted during download'); }), /quota exhausted/);
+  assert.deepEqual(fs.readdirSync(dir), []);
+});

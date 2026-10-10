@@ -3,6 +3,7 @@ import path from 'node:path';
 import { MAX_MEDIA } from './wechat.js';
 import { randomUUID } from 'node:crypto';
 import { localPath, pretty } from './core.js';
+import { snapshotExport, exportRoot, secureDir, mediaUsage, removeSnapshot } from './storage.js';
 
 export const HELP = {
   en: `WeChat Codex Local
@@ -20,7 +21,7 @@ export const HELP = {
 /skills [search words|show N|on N|off N]
 /plugins [search words|show N|install N|uninstall N]
 /experimental [on name|off name]
-/uploads [begin|send|clear] · /download path · /outbox [retry|clear]
+/uploads [begin|send|clear] · /exports · /storage · /download filename · /outbox [retry [ID]|drop ID|clear]
 /login [status|cancel] · /progress on|off · /lang en|zh
 /send text (send literal text that begins with a slash)
 / (refresh WeChat reply context without starting a turn)
@@ -43,7 +44,7 @@ Model replies and existing Codex instructions keep their original language.`,
 /skills [search 关键词|show 序号|on 序号|off 序号]
 /plugins [search 关键词|show 序号|install 序号|uninstall 序号]
 /experimental [on 名称|off 名称]
-/uploads [begin|send|clear] · /download 路径 · /outbox [retry|clear]
+/uploads [begin|send|clear] · /exports 导出目录 · /storage 存储 · /download 文件名 · /outbox [retry [ID]|drop ID|clear]
 /login [status|cancel] · /progress on|off · /lang en|zh
 /send 原始文本（用于以 / 开头的消息）
 / 仅刷新微信回复上下文
@@ -135,7 +136,7 @@ export async function command(c, user, name, arg) {
     const id = chat.threadId; const t = id ? c.record(id) : null;
     say(pretty({ connected: !!c.rpc.child, thread: id, cwd: t?.cwd ?? c.cwd, model: t?.model, effort: t?.effort,
       tier: t?.serviceTier, mode: t?.mode, activeTurns: [...c.active].map(([thread, turn]) => ({ thread, turn })),
-      lastTurnStatus: t?.lastTurnStatus, pendingRequests: c.pending.size, queuedReplies: c.state.data.outbox.length,
+      lastTurnStatus: t?.lastTurnStatus, pendingRequests: c.pending.size, queuedReplies: c.state.data.outbox.length, droppedReplies: c.state.data.droppedReplies ?? 0, rejectedMessages: c.state.data.rejectedMessages ?? 0,
       stagedAttachments: chat.uploads.length, approvalPolicy: t?.approvalPolicy, approvalsReviewer: t?.approvalsReviewer, permissionProfile: t?.activePermissionProfile })); return;
   }
   if (name === 'usage') {
@@ -267,24 +268,25 @@ export async function command(c, user, name, arg) {
     else throw new Error('Usage: /uploads [begin|send [task]|clear]');
     return;
   }
+  if (name === 'exports') { say(`Export folder: ${secureDir(exportRoot(c.state.dir))}\nPlace files here locally, then use /download filename. Hidden, credential, and linked files are refused.`); return; }
+  if (name === 'storage') { say(pretty({ ...mediaUsage(c.state.dir), queuedReplies: c.state.data.outbox.length, failedReplies: c.state.data.outbox.filter(m => m.failed).length, droppedReplies: c.state.data.droppedReplies ?? 0 })); return; }
   if (name === 'download') {
-    if (!arg) throw new Error('Usage: /download path');
-    const [, t] = await current(); const file = fs.realpathSync(localPath(arg, t.cwd));
-    const stat = fs.statSync(file);
-    if (!stat.isFile()) throw new Error('Choose a regular file.');
-    if (stat.size > MAX_MEDIA) throw new Error('Attachment exceeds 25 MiB.');
-    // Snapshot the explicitly requested file so queue delays cannot change its content.
-    const folder = path.join(c.state.dir, 'outbound', randomUUID());
-    fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
-    const snapshot = path.join(folder, path.basename(file));
-    fs.copyFileSync(file, snapshot, fs.constants.COPYFILE_EXCL); fs.chmodSync(snapshot, 0o600);
-    c.state.enqueue(user, '', snapshot); say(`Queued file: ${file}`); return;
+    if (!arg) throw new Error('Usage: /download filename (inside /exports folder)');
+    const snapshot = snapshotExport(c.state.dir, arg, MAX_MEDIA);
+    c.state.enqueue(user, '', snapshot); say(`Queued file: ${path.basename(snapshot)}`); return;
   }
   if (name === 'outbox') {
-    if (arg === 'clear') { const count = c.state.data.outbox.length; c.state.data.outbox = []; c.state.save(); say(`Cleared ${count} queued replies. Session history is still available with /peek.`); }
-    else if (arg === 'retry') { for (const m of c.state.data.outbox) m.nextAt = 0; c.state.save(); say('Delivery retry requested. No Codex turn will be repeated.'); }
-    else if (!arg) say(pretty(c.state.data.outbox.map(m => ({ id: m.id, file: m.file, attempts: m.attempts, lastError: m.lastError }))));
-    else throw new Error('Usage: /outbox [retry|clear]');
+    if (arg === 'clear') { const count = c.state.data.outbox.length; for (const m of c.state.data.outbox) removeSnapshot(c.state.dir, m.file); c.state.data.outbox = []; c.state.save(); say(`Cleared ${count} queued replies. Session history is still available with /peek.`); }
+    else if (words[0] === 'retry' || words[0] === 'drop') {
+      const selected = words[1] ? c.state.data.outbox.filter(m => m.id === words[1]) : words[0] === 'retry' ? c.state.data.outbox : [];
+      if (!selected.length) throw new Error('Select a delivery ID from /outbox.');
+      if (words[0] === 'retry' && selected.some(m => m.file && m.exportPolicyVersion !== 1)) throw new Error('Legacy exports cannot be retried. Drop the delivery and copy the intended file into /exports before requesting it again.');
+      if (words[0] === 'drop') { for (const m of selected) removeSnapshot(c.state.dir, m.file); c.state.data.outbox = c.state.data.outbox.filter(m => !selected.includes(m)); }
+      else for (const m of selected) { m.failed = false; m.attempts = 0; m.nextAt = 0; }
+      c.state.save(); say(`Delivery ${words[0]} completed. No Codex task was repeated.`);
+    }
+    else if (!arg) say(pretty(c.state.data.outbox.map(m => ({ id: m.id, file: m.file, attempts: m.attempts, failed: !!m.failed, lastError: m.lastError }))));
+    else throw new Error('Usage: /outbox [retry [ID]|drop ID|clear]');
     return;
   }
   if (name === 'login') {

@@ -5,6 +5,9 @@ import { State, acquireLock } from './state.js';
 import { Codex } from './rpc.js';
 import { WeChat } from './wechat.js';
 import { Controller } from './core.js';
+import { randomUUID } from 'node:crypto';
+import { reserveMedia, mediaUsage, removeSnapshot } from './storage.js';
+import { MAX_MEDIA } from './wechat.js';
 
 export function existingBridgeRunning() {
   if (process.platform !== 'linux') return false;
@@ -27,12 +30,15 @@ export async function receive(controller, transport, entry) {
     if (item.type === 1 && typeof item.text_item?.text === 'string') text.push(item.text_item.text);
     else if (item.type === 3 && item.voice_item?.text) text.push(item.voice_item.text);
     else if ([2, 3, 4, 5].includes(item.type)) {
-      const file = await transport.download(item, path.join(controller.state.dir, 'inbound'));
+      reserveMedia(controller.state.dir, MAX_MEDIA);
+      const file = await transport.download(item, path.join(controller.state.dir, 'inbound'), bytes => reserveMedia(controller.state.dir, bytes));
       if (file) files.push(file);
     }
     // Quoted content is deliberately not promoted to instructions or a new user message.
   }
-  await controller.handle(message.from_user_id, text.join('\n'), files, entry.id);
+  // Migrate older queued entries without sending sender IDs to app-server.
+  if (!entry.clientId) { entry.clientId = randomUUID(); controller.state.save(); }
+  await controller.handle(message.from_user_id, text.join('\n'), files, entry.clientId);
 }
 
 export async function drainInbox(controller, transport) {
@@ -47,19 +53,29 @@ export async function drainInbox(controller, transport) {
 }
 
 export async function deliverNext(state, transport, now = Date.now()) {
-  const item = state.data.outbox[0];
-  if (!item || (item.nextAt ?? 0) > now) return false;
+  const item = state.data.outbox.find(m => !m.failed && (!m.file || m.exportPolicyVersion === 1) && (m.nextAt ?? 0) <= now);
+  if (!item) return false;
   const context = state.chat(item.user).contextToken;
   if (!context) return false;
   try {
     if (item.file && !item.media) { item.media = await transport.upload(item.file, item.user); state.save(); }
+    if (!state.data.outbox.some(m => m.id === item.id)) return false;
     if (item.media) await transport.sendItems(item.user, context, [item.media], item.id);
     else await transport.text(item.user, context, item.text, item.id);
-    state.data.outbox.shift(); state.save(); return true;
+    state.data.outbox = state.data.outbox.filter(m => m.id !== item.id);
+    state.save(); removeSnapshot(state.dir, item.file); return true;
   } catch (error) {
     item.attempts++;
     item.nextAt = now + Math.min(60000, 1000 * 2 ** Math.min(item.attempts, 6));
-    item.lastError = error.code ?? 'delivery_failed'; state.save();
+    item.lastError = error.code ?? 'delivery_failed';
+    if (item.attempts >= 5 || ['ENOENT', 'EACCES', 'EINVAL'].includes(error.code)) {
+      item.failed = true;
+      if (!item.deliveryNotice) {
+        state.enqueue(item.user, `Delivery ${item.id} failed and was paused. Other replies can continue. Use /outbox, /outbox retry ID, or /outbox drop ID.`);
+        state.data.outbox.at(-1).deliveryNotice = true;
+      }
+    }
+    state.save();
     if (error.code === -14) throw error;
     return false;
   }
@@ -70,6 +86,7 @@ export async function serve({ dir, cwd, bin, account }) {
   if (account.importedFrom && existingBridgeRunning()) throw new Error('The old CodexBridge is still polling this account. Stop it before starting this service.');
   const unlock = acquireLock(dir);
   const state = new State(dir);
+  mediaUsage(dir);
   const rpc = new Codex({ bin, cwd });
   const controller = new Controller({ rpc, state, cwd, owner: account.userId });
   const transport = new WeChat(account);

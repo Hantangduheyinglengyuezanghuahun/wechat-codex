@@ -19,7 +19,7 @@ The reference program is Gan-Xing/CodexBridge. This table makes scope explicit: 
 | Provider switching, API-compatible adapters | No implementation; `/provider` displays the native provider already configured by the user |
 | Account pools | No implementation; native account status/login only |
 | Upload batching and text/image/file/video/voice transport | Local staging; native image/file inputs; existing WeChat voice transcription when present |
-| Bridge-specific automatic artifact pickup | Explicit `/download path`; no artifact instructions added to model context |
+| Bridge-specific automatic artifact pickup | Explicit `/download filename` from the dedicated export folder; no artifact instructions added to model context |
 | Assistant logs, notes, todos, reminders, Weibo | Excluded assistant workflows |
 | Bridge-created automation jobs | Excluded; native goals are supported when explicitly requested |
 | Retry and reconnect/restart | Explicit last-input retry, separate delivery retry, local Codex-child restart; no automatic task replay |

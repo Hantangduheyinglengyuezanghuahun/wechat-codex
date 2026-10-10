@@ -11,6 +11,7 @@ import { State, readJson, saveJson, acquireLock } from './state.js';
 import { WeChat, API, wechatUrl } from './wechat.js';
 import { Codex } from './rpc.js';
 import { serve, existingBridgeRunning } from './runtime.js';
+import { secureDir, secureFile } from './storage.js';
 
 const { positionals, values } = parseArgs({ allowPositionals: true, options: {
   'state-dir': { type: 'string' }, cwd: { type: 'string' }, codex: { type: 'string' },
@@ -137,7 +138,7 @@ Default state: ~/.wechat-codex. Your existing Codex config and login are used.`)
       }
       throw new Error('QR login timed out. Run login again.');
     } finally { rl?.close(); unlock(); }
-  } else if (command === 'serve') await serve({ dir, cwd, bin, account: readJson(accountFile, {}) });
+  } else if (command === 'serve') { secureDir(dir); secureFile(accountFile); await serve({ dir, cwd, bin, account: readJson(accountFile, {}) }); }
   else throw new Error(`Unknown command: ${command}`);
 }
 

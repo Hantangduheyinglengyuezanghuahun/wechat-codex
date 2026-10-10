@@ -64,8 +64,8 @@ The working directory is selected with `--cwd` when generating the service. Use 
 | Skills | `/skills`, `/skills search words`, `/skills show N`, `/skills on N`, `/skills off N` |
 | Plugins | `/plugins`, `/plugins search words`, `/plugins show N`, `/plugins install N`, `/plugins uninstall N` |
 | Experimental features | `/experimental`, `/experimental on name`, `/experimental off name` (native runtime feature controls) |
-| Attachments | `/uploads`, `/uploads begin` or `/up`, `/uploads send [task]`, `/uploads clear`, `/download path` |
-| Connection | `/reconnect`, `/restart` (restart this client's Codex child), `/outbox [retry\|clear]`, `/login [status\|cancel]` |
+| Attachments | `/uploads`, `/uploads begin` or `/up`, `/uploads send [task]`, `/uploads clear`, `/exports`, `/storage`, `/download filename` |
+| Connection | `/reconnect`, `/restart` (restart this client's Codex child), `/outbox [retry [ID]\|drop ID\|clear]`, `/login [status\|cancel]` |
 | Display | `/help`, `/lang en\|zh` (help language), `/progress on\|off` |
 
 Session and model indices refer to the last list displayed. `/search` uses native full-text search. `/model default` restores the effective project configuration's model and effort. `/models` displays the native catalog, which is not a guarantee of account entitlement. Changing the model, plan mode, or permission profile affects the selected thread; changing a skill or installing a plugin changes native Codex configuration.
@@ -78,7 +78,11 @@ Ordinary text sent during a running turn uses native steering. `/stop` interrupt
 
 Send one or more files/images, then your task. An attachment-only message is staged rather than starting an unexplained model turn. `/up` stages a batch, including captions, until you send the task or `/uploads send`. Paths and names remain visible through `/uploads`. Supported transport types are images, files, videos, and voice; raw voice/video are attached as files, and their interpretation depends on native Codex tools. This client does not run its own transcription model or inject media interpretation instructions. Each file is limited to 25 MiB.
 
-Use `/download /absolute/path/to/result.pdf` to send a local result back to yourself. The file is snapshotted under `~/.wechat-codex/outbound` at command time, so later edits do not change the queued attachment. Model text is never scanned for instructions to transmit arbitrary files. Outgoing files use Tencent's file-message format, including images sent with `/download`.
+Use `/exports` to see the dedicated export folder (default `~/.wechat-codex/exports`). Place the intended result there locally, then send `/download result.pdf`. Absolute paths are accepted only inside that folder. Traversal, symlinks, hardlinks, hidden paths, and common credential filenames/extensions are rejected. This command is a local file-transfer control, outside Codex approvals; the export folder is its boundary. Do not put secrets there: filenames cannot identify every secret. Set `WECHAT_CODEX_EXPORT_DIR` locally before starting the service to choose a different dedicated folder; it cannot be widened from WeChat. A private snapshot is deleted after delivery or explicit removal. Previously queued exports are quarantined and must be re-requested from the export folder.
+
+Incoming attachments and outbound snapshots share a 512 MiB / 2,048-file limit. Incoming files reserve the full 25 MiB per-file allowance before download. `/storage` shows usage. Existing input files are preserved because native sessions may still reference them; remove unneeded files from `~/.wechat-codex/inbound` locally to free space. The export folder contains your own originals and is not automatically cleaned or included in this managed-media quota.
+
+Delivery retries back off, allowing later messages to proceed. After five failures (or a permanent local file error), a delivery is paused. `/outbox` shows its ID; `/outbox retry ID` retries just that delivery and `/outbox drop ID` removes it. Messages can arrive out of order after a failure. Dropping a reply cannot recall a network send already in progress. Outgoing storage is bounded to 1,000 replies and approximately 4 MiB; under sustained failure, the oldest queued replies are discarded and counted by `/status` and `/storage`. Native conversation history remains available through `/peek`. Incoming queues are bounded to 1,000 messages / approximately 4 MiB; polling waits for space. Individual incoming message envelopes over 64 KiB are rejected and counted by `/status` (this excludes separately downloaded media bytes).
 
 Final responses retain their text, split at UTF-8 boundaries for WeChat. Completed commentary messages are relayed at most once every 20 seconds when progress is on. This is not a token-by-token mirror of the terminal. WeChat can limit consecutive replies; send `/` to refresh the reply context if necessary. `/outbox clear` discards queued deliveries, without deleting native conversation history; `/peek` can retrieve the latest conversation again.
 
@@ -106,12 +110,7 @@ systemctl --user status wechat-codex.service
 
 After stopping the old service, refresh the imported polling cursor before starting the replacement if the old service received messages since import. See [deployment notes](deploy/README.md). The client never adds sudo, disables Codex's sandbox, or installs a public HTTP listener. Service operation after logout depends on the machine's existing systemd user/linger setup.
 
-Rollback:
-
-```bash
-systemctl --user disable --now wechat-codex.service
-systemctl --user enable --now com.ganxing.codexbridge-weixin.service
-```
+Rollback: follow the [cursor-preserving rollback steps](deploy/README.md#switch-back-to-the-original-codexbridge). Stop the new client before starting the original; the helper transfers the latest polling position to reduce replay risk.
 
 ## Validation and scope
 

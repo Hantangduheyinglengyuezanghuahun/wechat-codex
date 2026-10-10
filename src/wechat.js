@@ -1,3 +1,4 @@
+import { secureDir } from './storage.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes, randomUUID, createCipheriv, createDecipheriv, createHash } from 'node:crypto';
@@ -93,7 +94,7 @@ export class WeChat {
     const config = await this.api('getconfig', { ilink_user_id: user, context_token: context }, { timeout: 10000 });
     if (config.typing_ticket) await this.api('sendtyping', { ilink_user_id: user, typing_ticket: config.typing_ticket, status }, { timeout: 10000 });
   }
-  async download(item, dir) {
+  async download(item, dir, beforeWrite = () => {}) {
     const object = item.image_item ?? item.file_item ?? item.voice_item ?? item.video_item;
     if (!object) return null;
     const media = object.media;
@@ -109,7 +110,8 @@ export class WeChat {
     if (bytes.length > MAX_MEDIA) throw new Error('Attachment exceeds 25 MiB.');
     let name = object.file_name || (item.type === 2 ? imageName(bytes) : item.type === 3 ? 'voice.silk' : 'video.mp4');
     name = name.replaceAll('\\', '/').split('/').at(-1).replace(/[\x00-\x1f\x7f]/g, '_').slice(-160) || 'attachment.bin';
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    secureDir(dir);
+    beforeWrite(bytes.length);
     const file = path.join(dir, `${randomUUID()}-${name}`);
     fs.writeFileSync(file, bytes, { mode: 0o600, flag: 'wx' });
     return { path: file, name, kind: item.type === 2 ? 'image' : item.type === 3 ? 'audio' : 'file' };

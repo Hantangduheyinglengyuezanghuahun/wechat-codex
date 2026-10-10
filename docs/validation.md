@@ -9,3 +9,7 @@ Tested with Node.js 24.21.0 and codex-cli 0.160.1.
 - **Deployment checks passed.** The systemd unit validates with `systemd-analyze --user verify`. Starting the replacement while the old imported-account poller is running is rejected as intended.
 
 At the time of these checks, the old service was left active pending the user's handover choice. A real phone message through the replacement has **not yet been tested**. QR login's fresh-pairing/verification branches were implemented from Tencent's current protocol but have not been exercised live. File encryption and upload envelopes passed local tests; live file transfer to the user's phone remains untested. This report does not claim complete terminal-UI equivalence or full feature parity with the reference's added assistant workflows.
+
+## Security hardening validation
+
+The hardening update passes 38 automated tests, including export traversal/symlink/hardlink rejection, legacy-export quarantine, snapshot removal, cancellation during upload, failed-delivery isolation, retry limits, directory permissions, media/queue budgets, and rollback migration using temporary accounts. The native read-only doctor also passes. No real WeChat message was sent by these checks; phone delivery still needs a user message.

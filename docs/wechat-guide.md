@@ -215,3 +215,11 @@ Send these messages one at a time:
 6. `/usage` — check usage afterward.
 
 For additional commands, see the [README command table](../README.md#wechat-commands) or send `/help`. This guide describes this repository’s implemented WeChat commands; the interactive Codex terminal may use different menus or syntax.
+
+## File downloads and delivery recovery
+
+Send `/exports` to see the dedicated export folder. Put the intended result in that folder on the computer, then send `/download result.pdf`. Files elsewhere cannot be downloaded directly. Keep credentials out of this folder. Send `/storage` to see the managed attachment quota and any discarded-reply count.
+
+A failed reply no longer blocks all later replies. Use `/outbox` to find the failed delivery ID, `/outbox retry ID` to retry it, or `/outbox drop ID` to remove it. These commands do not repeat the Codex task. After five failures a reply pauses until you retry it. `/outbox clear` removes all queued deliveries.
+
+For switching back to the original client, see [the rollback instructions](../deploy/README.md#switch-back-to-the-original-codexbridge).
