@@ -1,0 +1,9 @@
+node_modules/
+.state/
+*.log
+coverage/
+
+# Generated for one machine; regenerate with the service command.
+deploy/*.service
+.env
+.env.*
