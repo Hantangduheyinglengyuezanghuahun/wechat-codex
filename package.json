@@ -1,0 +1,17 @@
+{
+  "name": "wechat-codex-local",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Personal WeChat controls for the installed Codex CLI app-server",
+  "engines": { "node": ">=22.13.0" },
+  "bin": { "wechat-codex": "./src/cli.js" },
+  "scripts": {
+    "start": "node src/cli.js serve",
+    "login": "node src/cli.js login",
+    "doctor": "node src/cli.js doctor",
+    "test": "node --test test/*.test.js",
+    "test:live": "node scripts/live-check.js"
+  },
+  "dependencies": { "qrcode": "1.5.4" }
+}
