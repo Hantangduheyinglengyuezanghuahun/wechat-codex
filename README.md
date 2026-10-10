@@ -51,6 +51,8 @@ The working directory is selected with `--cwd` when generating the service. Use 
 
 ## WeChat commands
 
+**Start here: [Practical WeChat guide — permissions, automatic review, usage, and models](docs/wechat-guide.md).** It includes copy-and-send examples and explains what each setting changes.
+
 | Area | Commands |
 | --- | --- |
 | Sessions | `/new [directory]`, `/threads [archived]`, `/search words`, `/next`, `/prev`, `/open N\|ID`, `/peek [N\|ID]`, `/rename N\|ID title`, `/fork [N\|ID]`, `/archive [N\|ID]`, `/unarchive N\|ID` |
